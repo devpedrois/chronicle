@@ -48,10 +48,11 @@ public record StoredEvent(
             throw new IllegalArgumentException("version must be >= 1, got: " + version);
         }
         // [SECURITY] Payload size validated at record construction — defense in depth
-        // Prevents DoS via oversized payloads propagating into the persistence layer
-        if (payload.length() > 65536) {
+        // Byte count checked (not char count) — multi-byte UTF-8 chars would exceed the DB limit
+        byte[] payloadBytes = payload.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        if (payloadBytes.length > 65536) {
             throw new IllegalArgumentException(
-                    "payload exceeds 64KB limit: " + payload.length() + " chars");
+                    "payload exceeds 64KB limit: " + payloadBytes.length + " bytes");
         }
     }
 }

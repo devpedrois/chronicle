@@ -5,6 +5,7 @@ import com.chronicle.core.aggregate.AggregateRoot;
 import com.chronicle.core.event.DomainEvent;
 import com.chronicle.example.domain.event.AccountCreated;
 import com.chronicle.example.domain.event.MoneyDeposited;
+import com.chronicle.example.domain.event.MoneyReceived;
 import com.chronicle.example.domain.event.MoneyTransferred;
 import com.chronicle.example.domain.event.MoneyWithdrawn;
 
@@ -33,6 +34,8 @@ public class BankAccount extends Aggregate<BankAccountState> {
                     state.balanceCents() - e.amountCents(), state.active());
             case MoneyTransferred e -> new BankAccountState(state.id(), state.ownerName(),
                     state.balanceCents() - e.amountCents(), state.active());
+            case MoneyReceived e -> new BankAccountState(state.id(), state.ownerName(),
+                    state.balanceCents() + e.amountCents(), state.active());
             // [SECURITY] Explicit failure on unknown event — no silent ignore
             default -> throw new IllegalArgumentException(
                     "Unknown event type: " + event.getClass().getSimpleName());
@@ -79,6 +82,9 @@ public class BankAccount extends Aggregate<BankAccountState> {
         // [SECURITY] Null description rejected — null would cause NPE during Jackson serialization,
         // producing a misleading error that leaks internal structure
         Objects.requireNonNull(description, "description must not be null");
+        if (description.length() > 255) {
+            throw new IllegalArgumentException("description must not exceed 255 characters");
+        }
         if (amountCents <= 0) {
             throw new IllegalArgumentException("Amount must be positive");
         }
@@ -105,6 +111,9 @@ public class BankAccount extends Aggregate<BankAccountState> {
         Objects.requireNonNull(root, "root must not be null");
         // [SECURITY] Null description rejected — null would cause NPE during Jackson serialization
         Objects.requireNonNull(description, "description must not be null");
+        if (description.length() > 255) {
+            throw new IllegalArgumentException("description must not exceed 255 characters");
+        }
         if (amountCents <= 0) {
             throw new IllegalArgumentException("Amount must be positive");
         }
@@ -135,6 +144,9 @@ public class BankAccount extends Aggregate<BankAccountState> {
         Objects.requireNonNull(toAccountId, "toAccountId must not be null");
         // [SECURITY] Null description rejected — null would cause NPE during Jackson serialization
         Objects.requireNonNull(description, "description must not be null");
+        if (description.length() > 255) {
+            throw new IllegalArgumentException("description must not exceed 255 characters");
+        }
         // [SECURITY] Self-transfer rejected — transferring to self reduces balance without any corresponding credit,
         // creating a money-destruction vulnerability exploitable via the API
         if (toAccountId.equals(root.getId())) {
@@ -154,5 +166,33 @@ public class BankAccount extends Aggregate<BankAccountState> {
             throw new InsufficientFundsException(root.getId(), root.getState().balanceCents(), amountCents);
         }
         root.handleEvent(new MoneyTransferred(toAccountId, amountCents, description));
+    }
+
+    /**
+     * Credits the destination account as the receiving side of a transfer.
+     * Must be called on the destination aggregate after calling {@link #transfer} on the source.
+     *
+     * @param root          the destination account aggregate root
+     * @param fromAccountId source account UUID
+     * @param amountCents   amount in cents, must be positive and <= 1,000,000.00
+     * @param description   human-readable description
+     */
+    public void receiveTransfer(AggregateRoot<BankAccountState> root, UUID fromAccountId, long amountCents, String description) {
+        Objects.requireNonNull(root, "root must not be null");
+        Objects.requireNonNull(fromAccountId, "fromAccountId must not be null");
+        Objects.requireNonNull(description, "description must not be null");
+        if (description.length() > 255) {
+            throw new IllegalArgumentException("description must not exceed 255 characters");
+        }
+        if (amountCents <= 0) {
+            throw new IllegalArgumentException("Amount must be positive");
+        }
+        if (amountCents > 100_000_000) {
+            throw new IllegalArgumentException("Amount exceeds maximum of 1,000,000.00");
+        }
+        if (!root.getState().active()) {
+            throw new IllegalStateException("Account is inactive");
+        }
+        root.handleEvent(new MoneyReceived(fromAccountId, amountCents, description));
     }
 }

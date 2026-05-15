@@ -71,6 +71,8 @@ public class AggregateRoot<S> {
     }
 
     public void setId(UUID id) {
+        // [SECURITY] Null id rejected — null would corrupt event stream isolation (all events share null aggregate_id)
+        Objects.requireNonNull(id, "id must not be null");
         this.id = id;
     }
 
@@ -79,6 +81,10 @@ public class AggregateRoot<S> {
     }
 
     public void setVersion(int version) {
+        // [SECURITY] Negative version rejected — negative version corrupts expectedVersion computation in save()
+        if (version < 0) {
+            throw new IllegalArgumentException("version must be >= 0, got: " + version);
+        }
         this.version = version;
     }
 
@@ -87,6 +93,8 @@ public class AggregateRoot<S> {
     }
 
     public void setState(S state) {
+        // [SECURITY] Null state rejected — null state bypasses apply() pure-function invariant
+        Objects.requireNonNull(state, "state must not be null");
         this.state = state;
     }
 }

@@ -2,12 +2,17 @@ package com.chronicle.example.domain;
 
 import com.chronicle.core.aggregate.AggregateRoot;
 import com.chronicle.core.event.DomainEvent;
+import com.chronicle.core.serialization.EventTypeRegistry;
 import com.chronicle.example.domain.event.AccountCreated;
 import com.chronicle.example.domain.event.MoneyDeposited;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
+import com.chronicle.example.domain.event.MoneyReceived;
+import com.chronicle.core.snapshot.Snapshot;
+
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
@@ -212,5 +217,159 @@ class BankAccountSecurityTest {
 
         assertThatThrownBy(() -> root.getUncommittedEvents().add(new MoneyDeposited(999L, "injected")))
                 .isInstanceOf(UnsupportedOperationException.class);
+    }
+
+    // ─── Description Length Validation ───────────────────────────────────────
+
+    @Test
+    @DisplayName("[SECURITY] oversized description on deposit rejected — domain-level enforcement, not just DTO")
+    void shouldRejectOversizedDescriptionOnDeposit() {
+        AggregateRoot<BankAccountState> root = BankAccount.create("Mike");
+        String tooLong = "x".repeat(256);
+
+        assertThatThrownBy(() -> bankAccount.deposit(root, 100L, tooLong))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("255");
+    }
+
+    @Test
+    @DisplayName("[SECURITY] oversized description on withdraw rejected — domain-level enforcement")
+    void shouldRejectOversizedDescriptionOnWithdraw() {
+        AggregateRoot<BankAccountState> root = BankAccount.create("Nina");
+        bankAccount.deposit(root, 500L, "init");
+        String tooLong = "x".repeat(256);
+
+        assertThatThrownBy(() -> bankAccount.withdraw(root, 100L, tooLong))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("255");
+    }
+
+    @Test
+    @DisplayName("[SECURITY] oversized description on transfer rejected — domain-level enforcement")
+    void shouldRejectOversizedDescriptionOnTransfer() {
+        AggregateRoot<BankAccountState> root = BankAccount.create("Oscar");
+        bankAccount.deposit(root, 500L, "init");
+        String tooLong = "x".repeat(256);
+
+        assertThatThrownBy(() -> bankAccount.transfer(root, UUID.randomUUID(), 100L, tooLong))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("255");
+    }
+
+    @Test
+    @DisplayName("description at max boundary (255 chars) accepted")
+    void shouldAcceptDescriptionAtMaxBoundary() {
+        AggregateRoot<BankAccountState> root = BankAccount.create("Paula");
+        String maxLen = "x".repeat(255);
+
+        bankAccount.deposit(root, 100L, maxLen);
+
+        assertThat(root.getState().balanceCents()).isEqualTo(100L);
+    }
+
+    // ─── receiveTransfer ──────────────────────────────────────────────────────
+
+    @Test
+    @DisplayName("receiveTransfer credits destination account with correct amount")
+    void receiveTransferCreditsDestionation() {
+        AggregateRoot<BankAccountState> source = BankAccount.create("Quinn");
+        bankAccount.deposit(source, 1000L, "init");
+        AggregateRoot<BankAccountState> dest = BankAccount.create("Rachel");
+
+        bankAccount.transfer(source, dest.getId(), 300L, "payment");
+        bankAccount.receiveTransfer(dest, source.getId(), 300L, "payment received");
+
+        assertThat(source.getState().balanceCents()).isEqualTo(700L);
+        assertThat(dest.getState().balanceCents()).isEqualTo(300L);
+    }
+
+    @Test
+    @DisplayName("[SECURITY] receiveTransfer on inactive account rejected")
+    void receiveTransferRejectedOnInactiveAccount() {
+        AggregateRoot<BankAccountState> dest = new AggregateRoot<>(new BankAccount());
+        dest.setId(UUID.randomUUID());
+
+        assertThatThrownBy(() -> bankAccount.receiveTransfer(dest, UUID.randomUUID(), 100L, "credit"))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("inactive");
+    }
+
+    @Test
+    @DisplayName("[SECURITY] receiveTransfer null fromAccountId rejected")
+    void receiveTransferRejectsNullFromAccountId() {
+        AggregateRoot<BankAccountState> dest = BankAccount.create("Sam");
+
+        assertThatThrownBy(() -> bankAccount.receiveTransfer(dest, null, 100L, "credit"))
+                .isInstanceOf(NullPointerException.class);
+    }
+
+    @Test
+    @DisplayName("[SECURITY] receiveTransfer with oversized description rejected")
+    void receiveTransferRejectsOversizedDescription() {
+        AggregateRoot<BankAccountState> dest = BankAccount.create("Tina");
+        String tooLong = "x".repeat(256);
+
+        assertThatThrownBy(() -> bankAccount.receiveTransfer(dest, UUID.randomUUID(), 100L, tooLong))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("255");
+    }
+
+    // ─── AggregateRoot Setter Validation ─────────────────────────────────────
+
+    @Test
+    @DisplayName("[SECURITY] setVersion with negative value rejected — prevents expectedVersion corruption in save()")
+    void aggregateRootRejectsNegativeVersion() {
+        AggregateRoot<BankAccountState> root = BankAccount.create("Uma");
+
+        assertThatThrownBy(() -> root.setVersion(-1))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("version must be >= 0");
+    }
+
+    @Test
+    @DisplayName("[SECURITY] setId with null rejected — prevents null aggregate_id corrupting event stream")
+    void aggregateRootRejectsNullId() {
+        AggregateRoot<BankAccountState> root = new AggregateRoot<>(new BankAccount());
+
+        assertThatThrownBy(() -> root.setId(null))
+                .isInstanceOf(NullPointerException.class);
+    }
+
+    @Test
+    @DisplayName("[SECURITY] setState with null rejected — null state bypasses apply() invariant")
+    void aggregateRootRejectsNullState() {
+        AggregateRoot<BankAccountState> root = BankAccount.create("Victor");
+
+        assertThatThrownBy(() -> root.setState(null))
+                .isInstanceOf(NullPointerException.class);
+    }
+
+    // ─── EventTypeRegistry Duplicate Class ───────────────────────────────────
+
+    @Test
+    @DisplayName("[SECURITY] registering same class under two type names rejected — prevents typeNameFor() aliasing")
+    void eventTypeRegistryRejectsDuplicateClass() {
+        EventTypeRegistry registry = new EventTypeRegistry();
+        registry.register("MoneyReceived", MoneyReceived.class);
+
+        assertThatThrownBy(() -> registry.register("MoneyReceivedAlias", MoneyReceived.class))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("already registered as");
+    }
+
+    // ─── Snapshot Checksum Format ─────────────────────────────────────────────
+
+    @Test
+    @DisplayName("[SECURITY] Snapshot rejects malformed checksum (not 64 lowercase hex chars)")
+    void snapshotRejectsMalformedChecksum() {
+        assertThatThrownBy(() -> new Snapshot(
+                UUID.randomUUID(), "BankAccount", "{}", 1, "not-a-sha256", Instant.now()))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("SHA-256 hex");
+
+        assertThatThrownBy(() -> new Snapshot(
+                UUID.randomUUID(), "BankAccount", "{}", 1, "ABCD".repeat(16), Instant.now()))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("SHA-256 hex");
     }
 }

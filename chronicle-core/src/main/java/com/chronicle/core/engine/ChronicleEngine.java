@@ -46,12 +46,14 @@ public class ChronicleEngine<S> {
             SnapshotPolicy snapshotPolicy,
             Aggregate<S> aggregate,
             Class<S> stateType) {
-        this.eventStore = eventStore;
-        this.snapshotStore = snapshotStore;
-        this.serializer = serializer;
-        this.snapshotPolicy = snapshotPolicy;
-        this.aggregate = aggregate;
-        this.stateType = stateType;
+        // [SECURITY] Null checks at construction — NPE at use site would produce misleading errors
+        // and could mask whether events were partially persisted before the failure
+        this.eventStore = Objects.requireNonNull(eventStore, "eventStore must not be null");
+        this.snapshotStore = Objects.requireNonNull(snapshotStore, "snapshotStore must not be null");
+        this.serializer = Objects.requireNonNull(serializer, "serializer must not be null");
+        this.snapshotPolicy = Objects.requireNonNull(snapshotPolicy, "snapshotPolicy must not be null");
+        this.aggregate = Objects.requireNonNull(aggregate, "aggregate must not be null");
+        this.stateType = Objects.requireNonNull(stateType, "stateType must not be null");
     }
 
     /**
@@ -73,16 +75,22 @@ public class ChronicleEngine<S> {
         Optional<Snapshot> snapshot = snapshotStore.loadLatest(aggregateId);
         if (snapshot.isPresent()) {
             Snapshot snap = snapshot.get();
-            String recomputedChecksum = sha256(snap.state());
+            // [SECURITY] Secondary checksum validation — defense-in-depth against a buggy or malicious
+            // SnapshotStore that returns a Snapshot without validating the checksum.
+            // Formula must match the store: sha256(aggregateId + "|" + version + "|" + normalizedState).
+            // Binding all three fields prevents state, version, and cross-aggregate injection.
+            String checksumInput = snap.aggregateId() + "|" + snap.version() + "|" + snap.state();
+            String recomputedChecksum = sha256(checksumInput);
             if (recomputedChecksum.equals(snap.checksum())) {
                 S state = serializer.deserializeState(snap.state(), stateClass());
                 root.setState(state);
                 root.setVersion(snap.version());
                 startVersion = snap.version();
+                // [SECURITY] Snapshot validated → partial replay from snapshot.version + 1
             } else {
-                // [SECURITY] Snapshot Integrity — checksum mismatch triggers full replay
-                // Tampered or corrupted snapshot is silently discarded; system remains consistent via replay
-                log.warn("[SECURITY] Snapshot checksum mismatch for aggregate {} at version {} — discarding, performing full replay",
+                // [SECURITY] Snapshot Integrity — secondary checksum mismatch triggers full replay
+                // Store should have already caught this; this layer defends against a rogue store.
+                log.warn("[SECURITY] Engine secondary checksum mismatch for aggregate {} at version {} — discarding, performing full replay",
                         aggregateId, snap.version());
             }
         }
@@ -148,7 +156,10 @@ public class ChronicleEngine<S> {
 
         if (snapshotPolicy.shouldSnapshot(root.getVersion(), lastSnapshotVersion)) {
             String state = serializer.serializeState(root.getState());
-            String checksum = sha256(state);
+            // [SECURITY] Checksum binds aggregateId + version + state — matches load() validation formula
+            // sha256(state) alone would allow cross-aggregate and version-rollback attacks to pass the secondary check
+            String checksumInput = root.getId() + "|" + root.getVersion() + "|" + state;
+            String checksum = sha256(checksumInput);
             Snapshot snap = new Snapshot(
                     root.getId(),
                     aggregate.aggregateType(),

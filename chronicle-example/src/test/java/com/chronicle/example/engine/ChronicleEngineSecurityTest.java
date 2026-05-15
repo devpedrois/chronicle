@@ -95,11 +95,11 @@ class ChronicleEngineSecurityTest extends AbstractEngineTest {
     @Test
     @DisplayName("[SECURITY] root without ID in save() rejected — null aggregate_id corrupts stream isolation in DB")
     void shouldRejectRootWithNullId() {
-        // Simulate a root created via factory but then stripped of its ID.
-        // An attacker could use this to insert events with NULL aggregate_id,
-        // making them unreachable by any legitimate load() call.
-        AggregateRoot<BankAccountState> root = BankAccount.create("Victim");
-        root.setId(null); // simulate ID stripping after creation
+        // setId(null) is now rejected at the setter itself (defense-in-depth).
+        // The engine-level guard still fires for roots created without any ID set — e.g., via the
+        // internal constructor path that never calls setId().
+        AggregateRoot<BankAccountState> root = new AggregateRoot<>(new BankAccount());
+        // root.id is null — never set; simulates incomplete aggregate construction
 
         assertThatThrownBy(() -> engine.save(root))
                 .isInstanceOf(NullPointerException.class)

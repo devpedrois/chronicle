@@ -27,15 +27,24 @@ public class EventTypeRegistry {
      * @throws IllegalArgumentException if typeName is blank or clazz is null
      * @throws IllegalStateException    if typeName is already registered
      */
-    public void register(String typeName, Class<? extends DomainEvent> clazz) {
+    // [SECURITY] synchronized — prevents TOCTOU race where two threads register the same class under
+    // different type names, causing reverseMap to non-deterministically return one of the two names.
+    // ConcurrentHashMap alone is insufficient: reverseMap.get + putIfAbsent on typeMap + reverseMap.put
+    // is a three-step sequence that must be atomic to prevent type-name aliasing.
+    public synchronized void register(String typeName, Class<? extends DomainEvent> clazz) {
         Objects.requireNonNull(typeName, "typeName must not be null");
         if (typeName.isBlank()) {
             throw new IllegalArgumentException("typeName must not be blank");
         }
         Objects.requireNonNull(clazz, "clazz must not be null");
+        // [SECURITY] Prevent same class registered under two type names — reverseMap aliasing
+        // would cause typeNameFor() to return a non-deterministic name, corrupting serialized eventType
+        String existingTypeName = reverseMap.get(clazz);
+        if (existingTypeName != null) {
+            throw new IllegalStateException(
+                    "Event class " + clazz.getName() + " is already registered as '" + existingTypeName + "'");
+        }
         // [SECURITY] putIfAbsent is atomic — eliminates TOCTOU between containsKey() and put()
-        // A non-atomic containsKey+put pair allows two threads to both pass the check
-        // and silently overwrite a registered type with a different class (type confusion attack)
         Class<? extends DomainEvent> existing = typeMap.putIfAbsent(typeName, clazz);
         if (existing != null) {
             throw new IllegalStateException("Event type already registered: " + typeName);
