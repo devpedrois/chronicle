@@ -1,0 +1,28 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: chronicle-postgres
+    environment:
+      POSTGRES_DB: chronicle
+      POSTGRES_USER: chronicle_app
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-chronicle_secret}
+    ports:
+      - "5432:5432"
+    volumes:
+      - chronicle_pgdata:/var/lib/postgresql/data
+    networks:
+      - chronicle_net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U chronicle_app -d chronicle"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+volumes:
+  chronicle_pgdata:
+    driver: local
+
+networks:
+  chronicle_net:
+    driver: bridge
