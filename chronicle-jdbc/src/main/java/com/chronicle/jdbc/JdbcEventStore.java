@@ -35,6 +35,10 @@ public final class JdbcEventStore implements EventStore {
             "INSERT INTO events (event_id, aggregate_id, aggregate_type, event_type, payload, version, created_at) " +
             "VALUES (?, ?, ?, ?, ?::jsonb, ?, ?)";
 
+    // [SECURITY] Phase 1 version check — parameterized, no string interpolation
+    private static final String MAX_VERSION_SQL =
+            "SELECT COALESCE(MAX(version), 0) FROM events WHERE aggregate_id = ?";
+
     private static final String LOAD_SQL =
             "SELECT event_id, aggregate_id, aggregate_type, event_type, payload::text, version, created_at " +
             "FROM events WHERE aggregate_id = ? ORDER BY version ASC";
@@ -63,6 +67,15 @@ public final class JdbcEventStore implements EventStore {
 
         try {
             transactionTemplate.executeWithoutResult(status -> {
+                // [SECURITY] Phase 1: explicit version check before INSERT batch
+                // Catches conflicts early and surfaces the actual version to the caller.
+                // Phase 2 (UNIQUE constraint) remains as safety net for concurrent transactions
+                // that both pass Phase 1 simultaneously — defense in depth.
+                Integer currentVersion = jdbcTemplate.queryForObject(MAX_VERSION_SQL, Integer.class, aggregateId);
+                if (currentVersion != null && currentVersion > expectedVersion) {
+                    throw new ConcurrentModificationException(aggregateId, expectedVersion, currentVersion);
+                }
+
                 for (StoredEvent event : events) {
                     // [SECURITY] Payload size re-validated before DB insert — defense in depth
                     if (event.payload().length() > 65536) {

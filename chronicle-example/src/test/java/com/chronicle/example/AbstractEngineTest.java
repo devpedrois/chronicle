@@ -1,25 +1,24 @@
-package com.chronicle.jdbc;
+package com.chronicle.example;
 
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.testcontainers.containers.PostgreSQLContainer;
 
-@SpringBootTest
+@SpringBootTest(classes = TestChronicleEngineApp.class)
 @SuppressWarnings("resource")
-public abstract class AbstractPostgresTest {
+public abstract class AbstractEngineTest {
 
-    // Singleton pattern: one container for the entire test suite JVM run.
-    // @Testcontainers + static @Container can restart/stop the container between classes,
-    // causing the second context load to hang on container startup.
-    // Starting once in a static initializer ensures the container is always available.
     static final PostgreSQLContainer<?> POSTGRES;
 
     static {
         POSTGRES = new PostgreSQLContainer<>("postgres:16-alpine")
-                .withDatabaseName("chronicle_test")
+                .withDatabaseName("chronicle_engine_test")
                 .withUsername("test")
                 .withPassword("test");
+
+
+                
         POSTGRES.start();
     }
 

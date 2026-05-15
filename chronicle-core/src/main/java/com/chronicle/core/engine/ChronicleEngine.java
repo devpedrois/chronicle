@@ -12,6 +12,7 @@ import com.chronicle.core.store.SnapshotStore;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.Objects;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.Instant;
@@ -36,18 +37,21 @@ public class ChronicleEngine<S> {
     private final EventSerializer<S> serializer;
     private final SnapshotPolicy snapshotPolicy;
     private final Aggregate<S> aggregate;
+    private final Class<S> stateType;
 
     public ChronicleEngine(
             EventStore eventStore,
             SnapshotStore snapshotStore,
             EventSerializer<S> serializer,
             SnapshotPolicy snapshotPolicy,
-            Aggregate<S> aggregate) {
+            Aggregate<S> aggregate,
+            Class<S> stateType) {
         this.eventStore = eventStore;
         this.snapshotStore = snapshotStore;
         this.serializer = serializer;
         this.snapshotPolicy = snapshotPolicy;
         this.aggregate = aggregate;
+        this.stateType = stateType;
     }
 
     /**
@@ -57,6 +61,10 @@ public class ChronicleEngine<S> {
      * @return populated AggregateRoot or empty if not found
      */
     public Optional<AggregateRoot<S>> load(UUID aggregateId) {
+        // [SECURITY] Null aggregateId rejected — null would silently query all aggregates
+        // matching NULL in PostgreSQL (none), returning Optional.empty() for any ID,
+        // masking a caller bug and causing data loss if the caller then creates a duplicate.
+        Objects.requireNonNull(aggregateId, "aggregateId must not be null");
         AggregateRoot<S> root = new AggregateRoot<>(aggregate);
         root.setId(aggregateId);
 
@@ -103,6 +111,12 @@ public class ChronicleEngine<S> {
      * @param root the aggregate root with uncommitted events
      */
     public void save(AggregateRoot<S> root) {
+        // [SECURITY] Null root rejected early — NPE inside the method would produce a confusing
+        // stack trace and could mask whether events were partially persisted before the failure.
+        Objects.requireNonNull(root, "root must not be null");
+        // [SECURITY] Null aggregateId on root rejected — a root without an ID cannot be persisted
+        // reliably; all events would share a null aggregate_id, corrupting stream isolation.
+        Objects.requireNonNull(root.getId(), "root.id must not be null — was the aggregate created correctly?");
         List<DomainEvent> uncommitted = root.getUncommittedEvents();
         if (uncommitted.isEmpty()) {
             return;
@@ -157,8 +171,7 @@ public class ChronicleEngine<S> {
         }
     }
 
-    @SuppressWarnings("unchecked")
     private Class<S> stateClass() {
-        return (Class<S>) Object.class;
+        return stateType;
     }
 }
