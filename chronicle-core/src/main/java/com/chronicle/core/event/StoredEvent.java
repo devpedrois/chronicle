@@ -26,6 +26,24 @@ public record StoredEvent(
         Objects.requireNonNull(payload, "payload must not be null");
         Objects.requireNonNull(timestamp, "timestamp must not be null");
 
+        // [SECURITY] Blank strings rejected — empty aggregateType/eventType corrupt event streams
+        // and break EventTypeRegistry lookups, potentially causing silent deserialization failures
+        if (aggregateType.isBlank()) {
+            throw new IllegalArgumentException("aggregateType must not be blank");
+        }
+        if (eventType.isBlank()) {
+            throw new IllegalArgumentException("eventType must not be blank");
+        }
+        // [SECURITY] Field length validated against DB schema (VARCHAR(255)) — fail-fast at app layer
+        // prevents raw DB constraint errors from propagating up with internal details
+        if (aggregateType.length() > 255) {
+            throw new IllegalArgumentException(
+                    "aggregateType exceeds 255 chars: " + aggregateType.length());
+        }
+        if (eventType.length() > 255) {
+            throw new IllegalArgumentException(
+                    "eventType exceeds 255 chars: " + eventType.length());
+        }
         if (version < 1) {
             throw new IllegalArgumentException("version must be >= 1, got: " + version);
         }

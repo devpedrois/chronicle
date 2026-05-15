@@ -9,6 +9,9 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.RowMapper;
 import org.springframework.lang.NonNull;
 import org.springframework.transaction.PlatformTransactionManager;
+
+import com.fasterxml.jackson.core.JsonFactory;
+import com.fasterxml.jackson.core.JsonParser;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.sql.ResultSet;
@@ -66,6 +69,9 @@ public final class JdbcEventStore implements EventStore {
                         throw new IllegalArgumentException(
                                 "Event payload exceeds 64KB limit: " + event.payload().length() + " chars");
                     }
+                    // [SECURITY] JSON structure validated before DB insert — prevents raw DB cast errors
+                    // from propagating with internal PostgreSQL error details
+                    validateJson(event.payload());
 
                     // [SECURITY] Payload inserted as PGobject(type="jsonb") — not as interpolated string
                     // This prevents any possibility of SQL injection through event payload content
@@ -105,9 +111,27 @@ public final class JdbcEventStore implements EventStore {
     @Override
     public List<StoredEvent> loadAfterVersion(UUID aggregateId, int afterVersion) {
         Objects.requireNonNull(aggregateId, "aggregateId must not be null");
+        // [SECURITY] Negative afterVersion rejected — value of -1 would return the entire event stream
+        // effectively bypassing snapshot optimization and causing information disclosure
+        if (afterVersion < 0) {
+            throw new IllegalArgumentException("afterVersion must be >= 0, got: " + afterVersion);
+        }
         // [SECURITY] Prepared statement — parameterized query
         return jdbcTemplate.query(LOAD_AFTER_SQL, new StoredEventRowMapper(), aggregateId, afterVersion);
     }
+
+    // [SECURITY] JSON validation before DB insert — fail-fast with a clean IllegalArgumentException
+    // Prevents raw PostgreSQL cast errors (which may expose internal details) from reaching the caller
+    private static void validateJson(String payload) {
+        try (JsonParser parser = JSON_FACTORY.createParser(payload)) {
+            while (parser.nextToken() != null) { /* exhaust tokens to validate */ }
+        } catch (Exception e) {
+            throw new IllegalArgumentException(
+                    "payload is not valid JSON: " + e.getMessage(), e);
+        }
+    }
+
+    private static final JsonFactory JSON_FACTORY = new JsonFactory();
 
     private static final class StoredEventRowMapper implements RowMapper<StoredEvent> {
         @Override
