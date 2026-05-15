@@ -3,6 +3,7 @@ package com.chronicle.core.serialization;
 import com.chronicle.core.event.DomainEvent;
 import com.chronicle.core.event.EventSerializer;
 import com.fasterxml.jackson.databind.DeserializationFeature;
+import com.fasterxml.jackson.databind.MapperFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
 import com.fasterxml.jackson.databind.json.JsonMapper;
@@ -31,7 +32,10 @@ public class JacksonEventSerializer<S> implements EventSerializer<S> {
                 .addModule(new JavaTimeModule())
                 .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS)
                 .enable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES)
+                // [SECURITY] Reject null for primitives — prevents NullPointerException in domain logic
                 .enable(DeserializationFeature.FAIL_ON_NULL_FOR_PRIMITIVES)
+                // [SECURITY] Block unsafe polymorphic deserialization — prevents gadget chain RCE (CVE-2017-7525, CVE-2019-12086)
+                .enable(MapperFeature.BLOCK_UNSAFE_POLYMORPHIC_BASE_TYPES)
                 .build();
     }
 

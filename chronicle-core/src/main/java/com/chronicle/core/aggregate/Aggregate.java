@@ -12,10 +12,19 @@ import com.chronicle.core.event.DomainEvent;
 public abstract class Aggregate<S> {
 
     /**
+     * Returns the initial (empty) state before any events are applied.
+     * Called once when creating a new {@link com.chronicle.core.aggregate.AggregateRoot}.
+     *
+     * @return the zero-value state
+     */
+    public abstract S initialState();
+
+    /**
      * Applies a domain event to the current state, returning the new state.
      * This method MUST be a pure function — same inputs always produce the same output.
+     * // apply() MUST be a pure function — no I/O, no mutation, no side effects
      *
-     * @param state the current aggregate state (may be null for the initial event)
+     * @param state the current aggregate state
      * @param event the domain event to apply
      * @return the new aggregate state after applying the event
      */

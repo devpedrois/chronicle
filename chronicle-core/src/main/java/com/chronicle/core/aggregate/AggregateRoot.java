@@ -5,6 +5,7 @@ import com.chronicle.core.event.DomainEvent;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Objects;
 import java.util.UUID;
 
 /**
@@ -23,6 +24,7 @@ public class AggregateRoot<S> {
 
     public AggregateRoot(Aggregate<S> aggregate) {
         this.aggregate = aggregate;
+        this.state = aggregate.initialState();
     }
 
     /**
@@ -30,7 +32,10 @@ public class AggregateRoot<S> {
      * Does NOT add events to uncommittedEvents.
      */
     public void loadFromHistory(List<DomainEvent> history) {
+        // [SECURITY] Null check — null history or null elements would corrupt version counter silently
+        Objects.requireNonNull(history, "history must not be null");
         for (DomainEvent event : history) {
+            Objects.requireNonNull(event, "history must not contain null events");
             state = aggregate.apply(state, event);
             version++;
         }
@@ -41,6 +46,9 @@ public class AggregateRoot<S> {
      * Called by command methods on the aggregate to record what happened.
      */
     public void handleEvent(DomainEvent event) {
+        // [SECURITY] Null check — null event would silently increment version without applying state change,
+        // causing a version/state desync that is impossible to detect or recover from
+        Objects.requireNonNull(event, "event must not be null");
         state = aggregate.apply(state, event);
         uncommittedEvents.add(event);
         version++;
