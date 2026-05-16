@@ -73,8 +73,11 @@ public class AccountService {
     }
 
     public AccountResponse transfer(UUID fromId, TransferRequest req) {
-        // [SECURITY] Non-atomic cross-aggregate transfer — saga required for full atomicity.
-        // Partial failure window: debit saved, credit fails → saga/outbox out of scope for PR #6.
+        // [SECURITY] Validate destination exists BEFORE debiting source.
+        // Without this check: debit commits, credit throws NotFoundException → funds destroyed permanently.
+        // This is still non-atomic (saga required for full atomicity) but prevents fund destruction for non-existent accounts.
+        engine.load(req.toAccountId()).orElseThrow(() -> new NotFoundException(req.toAccountId()));
+
         AggregateRoot<BankAccountState> savedFromRoot = saveWithRetryRoot(() -> {
             AggregateRoot<BankAccountState> fromRoot = engine.load(fromId)
                     .orElseThrow(() -> new NotFoundException(fromId));
@@ -106,6 +109,10 @@ public class AccountService {
     }
 
     public List<EventResponse> getEvents(UUID accountId, Integer afterVersion) {
+        // [SECURITY] Validate afterVersion client input — internal param name must not leak in error message
+        if (afterVersion != null && afterVersion < 0) {
+            throw new IllegalArgumentException("Invalid 'after' parameter: must be >= 0");
+        }
         List<StoredEvent> events = afterVersion != null
                 ? eventStore.loadAfterVersion(accountId, afterVersion)
                 : eventStore.load(accountId);

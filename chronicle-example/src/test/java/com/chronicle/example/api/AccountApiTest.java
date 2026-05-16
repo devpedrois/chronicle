@@ -12,6 +12,7 @@ import org.springframework.test.web.servlet.MvcResult;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 
 class AccountApiTest extends AbstractApiTest {
 
@@ -150,6 +151,112 @@ class AccountApiTest extends AbstractApiTest {
         mockMvc.perform(get("/api/accounts/not-a-uuid"))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.error").value("Invalid parameter format"));
+    }
+
+    @Test
+    @DisplayName("Security 1: POST /api/accounts/{id}/transfer to non-existent account → 404, source balance unchanged")
+    void transfer_toNonExistentAccount_returns404AndDoesNotDebitSource() throws Exception {
+        String id = createAccount("Hank");
+        deposit(id, 5000);
+        // Wait for projection
+        Thread.sleep(600);
+
+        mockMvc.perform(post("/api/accounts/" + id + "/transfer")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"toAccountId\":\"00000000-0000-0000-0000-000000000099\",\"amountCents\":1000,\"description\":\"Test\"}"))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.error").value("Account not found"));
+
+        // Verify source balance is intact — debit must NOT have occurred
+        Thread.sleep(300);
+        mockMvc.perform(get("/api/accounts/" + id))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.balanceCents").value(5000));
+    }
+
+    @Test
+    @DisplayName("Security 2: POST /api/accounts/{id}/transfer to self → 400")
+    void transfer_toSelf_returns400() throws Exception {
+        String id = createAccount("Iris");
+        deposit(id, 3000);
+
+        mockMvc.perform(post("/api/accounts/" + id + "/transfer")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"toAccountId\":\"" + id + "\",\"amountCents\":1000,\"description\":\"Self\"}"))
+                .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    @DisplayName("Security 3: POST /api/accounts/{id}/deposit with amount above max → 400 (Bean Validation)")
+    void deposit_amountAboveMax_returns400() throws Exception {
+        String id = createAccount("Jack");
+
+        mockMvc.perform(post("/api/accounts/" + id + "/deposit")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"amountCents\":100000001,\"description\":\"OverMax\"}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error").value("Validation failed"));
+    }
+
+    @Test
+    @DisplayName("Security 4: POST /api/accounts with extra fields (version, aggregateType) — rejected with 400")
+    void createAccount_extraFieldsInBody_ignoredNoError() throws Exception {
+        // [SECURITY] FAIL_ON_UNKNOWN_PROPERTIES=true should reject this — verify 400
+        mockMvc.perform(post("/api/accounts")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"ownerName\":\"Kate\",\"version\":999,\"aggregateType\":\"hacked\"}"))
+                .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    @DisplayName("Security 5: GET /api/accounts/{id}/events?after=-1 → 400, not 500")
+    void getEvents_negativeAfterParam_returns400() throws Exception {
+        String id = createAccount("Leo");
+
+        String response = mockMvc.perform(get("/api/accounts/" + id + "/events?after=-1"))
+                .andExpect(status().isBadRequest())
+                .andReturn().getResponse().getContentAsString();
+
+        // [SECURITY] Internal parameter name "afterVersion" must not leak to client
+        assertThat(response).doesNotContain("afterVersion");
+        assertThat(response).contains("error");
+    }
+
+    @Test
+    @DisplayName("Security 6: POST /api/accounts with malformed JSON body → 400, no stack trace")
+    void createAccount_malformedJson_returns400NoStackTrace() throws Exception {
+        String response = mockMvc.perform(post("/api/accounts")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{not-valid-json"))
+                .andExpect(status().isBadRequest())
+                .andReturn().getResponse().getContentAsString();
+
+        assertThat(response).doesNotContain("stackTrace");
+        assertThat(response).doesNotContain("Exception");
+        assertThat(response).doesNotContain("at com.");
+    }
+
+    @Test
+    @DisplayName("Security 7: Security headers present on all responses")
+    void securityHeaders_presentOnResponse() throws Exception {
+        mockMvc.perform(get("/api/accounts/00000000-0000-0000-0000-000000000001"))
+                .andExpect(header().string("X-Content-Type-Options", "nosniff"))
+                .andExpect(header().string("X-Frame-Options", "DENY"))
+                .andExpect(header().string("Cache-Control", "no-store"))
+                .andExpect(header().exists("Content-Security-Policy"))
+                .andExpect(header().string("Server", "chronicle"));
+    }
+
+    @Test
+    @DisplayName("Security 8: POST /api/accounts/{id}/transfer with invalid UUID in body → 400, not 500")
+    void transfer_invalidUuidInBody_returns400() throws Exception {
+        String id = createAccount("Mia");
+
+        mockMvc.perform(post("/api/accounts/" + id + "/transfer")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"toAccountId\":\"not-a-uuid\",\"amountCents\":1000,\"description\":\"Test\"}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error").exists());
     }
 
     // --- helpers ---

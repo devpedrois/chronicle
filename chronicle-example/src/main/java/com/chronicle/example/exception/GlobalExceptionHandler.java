@@ -5,6 +5,7 @@ import com.chronicle.example.domain.InsufficientFundsException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.validation.FieldError;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
@@ -61,6 +62,13 @@ public class GlobalExceptionHandler {
     @ResponseStatus(HttpStatus.BAD_REQUEST)
     public Map<String, String> handleTypeMismatch(MethodArgumentTypeMismatchException e) {
         return Map.of("error", "Invalid parameter format");
+    }
+
+    // [SECURITY] Invalid JSON body or unparseable field (e.g. bad UUID in body) → 400, not 500
+    @ExceptionHandler(HttpMessageNotReadableException.class)
+    @ResponseStatus(HttpStatus.BAD_REQUEST)
+    public Map<String, String> handleMessageNotReadable(HttpMessageNotReadableException e) {
+        return Map.of("error", "Invalid request body");
     }
 
     @ExceptionHandler(Exception.class)

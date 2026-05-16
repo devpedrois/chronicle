@@ -16,9 +16,14 @@ import com.chronicle.example.projection.AccountBalanceProjection;
 import com.chronicle.jdbc.JdbcEventStore;
 import com.chronicle.jdbc.JdbcProjectionPositionStore;
 import com.chronicle.jdbc.JdbcSnapshotStore;
+import com.fasterxml.jackson.databind.DeserializationFeature;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.SerializationFeature;
+import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.Primary;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.transaction.PlatformTransactionManager;
 
@@ -26,6 +31,20 @@ import java.util.List;
 
 @Configuration
 public class ChronicleConfig {
+
+    // [SECURITY] Primary ObjectMapper — FAIL_ON_UNKNOWN_PROPERTIES=true rejects unknown fields in request bodies.
+    // Prevents type confusion attacks where extra fields are silently accepted or processed.
+    // NEVER call activateDefaultTyping() / enableDefaultTyping() — gadget chain RCE (CVE-2017-7525).
+    @Bean
+    @Primary
+    public ObjectMapper objectMapper() {
+        ObjectMapper mapper = new ObjectMapper();
+        mapper.registerModule(new JavaTimeModule());
+        mapper.disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
+        // [SECURITY] Reject any unknown field in request bodies — explicit allowlist via record fields
+        mapper.enable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES);
+        return mapper;
+    }
 
     // [SECURITY] EventTypeRegistry whitelist — only explicitly registered event types can be deserialized.
     // Prevents gadget-chain attacks (CVE-2017-7525) by rejecting any type not in the whitelist.
