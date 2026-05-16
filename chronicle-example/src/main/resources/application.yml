@@ -1,0 +1,25 @@
+spring:
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/chronicle}
+    username: ${DB_USER:chronicle}
+    password: ${DB_PASSWORD:chronicle}
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+
+server:
+  port: 8080
+  error:
+    # [SECURITY] Never expose stack traces or internal messages to clients
+    include-stacktrace: never
+    include-message: never
+
+chronicle:
+  projection:
+    poll-interval-ms: 500
+
+springdoc:
+  api-docs:
+    path: /api-docs
+  swagger-ui:
+    path: /swagger-ui.html

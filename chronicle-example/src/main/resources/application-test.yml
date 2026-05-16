@@ -1,0 +1,4 @@
+# Faster projection polling in tests for reliable eventual-consistency assertions
+chronicle:
+  projection:
+    poll-interval-ms: 100
