@@ -12,12 +12,11 @@ import com.chronicle.core.store.SnapshotStore;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import com.chronicle.core.util.ChecksumUtil;
+
 import java.util.Objects;
-import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
 import java.time.Instant;
 import java.util.ArrayList;
-import java.util.HexFormat;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -80,11 +79,12 @@ public class ChronicleEngine<S> {
             // Formula must match the store: sha256(aggregateId + "|" + version + "|" + normalizedState).
             // Binding all three fields prevents state, version, and cross-aggregate injection.
             String checksumInput = snap.aggregateId() + "|" + snap.version() + "|" + snap.state();
-            String recomputedChecksum = sha256(checksumInput);
+            String recomputedChecksum = ChecksumUtil.sha256(checksumInput);
             if (recomputedChecksum.equals(snap.checksum())) {
                 S state = serializer.deserializeState(snap.state(), stateClass());
                 root.setState(state);
                 root.setVersion(snap.version());
+                root.setLastSnapshotVersion(snap.version());
                 startVersion = snap.version();
                 // [SECURITY] Snapshot validated → partial replay from snapshot.version + 1
             } else {
@@ -140,7 +140,7 @@ public class ChronicleEngine<S> {
                     UUID.randomUUID(),
                     root.getId(),
                     aggregate.aggregateType(),
-                    event.getClass().getSimpleName(),
+                    serializer.typeNameFor(event),
                     serializer.serialize(event),
                     nextVersion++,
                     Instant.now()
@@ -150,35 +150,35 @@ public class ChronicleEngine<S> {
         eventStore.save(root.getId(), aggregate.aggregateType(), storedEvents, expectedVersion);
         root.clearUncommittedEvents();
 
-        int lastSnapshotVersion = snapshotStore.loadLatest(root.getId())
-                .map(Snapshot::version)
-                .orElse(0);
-
-        if (snapshotPolicy.shouldSnapshot(root.getVersion(), lastSnapshotVersion)) {
-            String state = serializer.serializeState(root.getState());
-            // [SECURITY] Checksum binds aggregateId + version + state — matches load() validation formula
-            // sha256(state) alone would allow cross-aggregate and version-rollback attacks to pass the secondary check
-            String checksumInput = root.getId() + "|" + root.getVersion() + "|" + state;
-            String checksum = sha256(checksumInput);
-            Snapshot snap = new Snapshot(
-                    root.getId(),
-                    aggregate.aggregateType(),
-                    state,
-                    root.getVersion(),
-                    checksum,
-                    Instant.now()
-            );
-            snapshotStore.saveSnapshot(snap);
-        }
-    }
-
-    private String sha256(String input) {
+        // [SECURITY] Snapshot failure must NOT propagate to the caller — events are already committed.
+        // A propagated exception would mislead the caller into believing the save failed,
+        // causing a retry that produces ConcurrentModificationException on a successfully saved aggregate.
         try {
-            MessageDigest digest = MessageDigest.getInstance("SHA-256");
-            byte[] hash = digest.digest(input.getBytes(java.nio.charset.StandardCharsets.UTF_8));
-            return HexFormat.of().formatHex(hash);
-        } catch (NoSuchAlgorithmException e) {
-            throw new IllegalStateException("SHA-256 not available", e);
+            // lastSnapshotVersion carried from load() — avoids an extra SELECT after every save().
+            // On a cold root (never loaded via load()), this is 0, which correctly triggers the
+            // first snapshot after N events.
+            int lastSnapshotVersion = root.getLastSnapshotVersion();
+
+            if (snapshotPolicy.shouldSnapshot(root.getVersion(), lastSnapshotVersion)) {
+                String state = serializer.serializeState(root.getState());
+                // [SECURITY] Checksum binds aggregateId + version + state — matches load() validation formula
+                // sha256(state) alone would allow cross-aggregate and version-rollback attacks to pass the secondary check
+                String checksumInput = root.getId() + "|" + root.getVersion() + "|" + state;
+                String checksum = ChecksumUtil.sha256(checksumInput);
+                Snapshot snap = new Snapshot(
+                        root.getId(),
+                        aggregate.aggregateType(),
+                        state,
+                        root.getVersion(),
+                        checksum,
+                        Instant.now()
+                );
+                snapshotStore.saveSnapshot(snap);
+                root.setLastSnapshotVersion(root.getVersion());
+            }
+        } catch (Exception e) {
+            log.warn("Snapshot failed for aggregate {} at version {} — events persisted, snapshot skipped: {}",
+                    root.getId(), root.getVersion(), e.getMessage());
         }
     }
 

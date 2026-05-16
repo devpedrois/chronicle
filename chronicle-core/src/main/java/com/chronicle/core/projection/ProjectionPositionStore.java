@@ -20,4 +20,12 @@ public interface ProjectionPositionStore {
      * UPSERT semantics.
      */
     void savePosition(ProjectionPosition position);
+
+    /**
+     * Deletes the position checkpoint for a projection.
+     * Called when resetting a projection to rebuild the read model from scratch.
+     *
+     * @param projectionName the projection identifier
+     */
+    void deletePosition(String projectionName);
 }

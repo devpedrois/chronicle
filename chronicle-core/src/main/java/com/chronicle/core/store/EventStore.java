@@ -51,4 +51,17 @@ public interface EventStore {
      * @return ordered list of stored events after the given version
      */
     List<StoredEvent> loadAfterVersion(UUID aggregateId, int afterVersion);
+
+    /**
+     * Loads events across all aggregates after the given event (exclusive), ordered by
+     * {@code (created_at, event_id::text)} ascending. Used by the projection engine
+     * to advance its global cursor without tying to a single aggregate stream.
+     *
+     * <p>// [SECURITY] LIMIT prevents unbounded result sets — caller must supply a positive value.
+     *
+     * @param lastEventId UUID of the last processed event; {@code null} to start from the beginning
+     * @param limit       maximum number of events to return; must be positive
+     * @return ordered list of events that follow the cursor
+     */
+    List<StoredEvent> loadAllAfter(UUID lastEventId, int limit);
 }

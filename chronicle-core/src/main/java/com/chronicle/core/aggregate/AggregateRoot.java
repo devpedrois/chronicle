@@ -19,6 +19,7 @@ public class AggregateRoot<S> {
     private UUID id;
     private int version;
     private S state;
+    private int lastSnapshotVersion;
     private final List<DomainEvent> uncommittedEvents = new ArrayList<>();
     private final Aggregate<S> aggregate;
 
@@ -96,5 +97,16 @@ public class AggregateRoot<S> {
         // [SECURITY] Null state rejected — null state bypasses apply() pure-function invariant
         Objects.requireNonNull(state, "state must not be null");
         this.state = state;
+    }
+
+    public int getLastSnapshotVersion() {
+        return lastSnapshotVersion;
+    }
+
+    public void setLastSnapshotVersion(int lastSnapshotVersion) {
+        if (lastSnapshotVersion < 0) {
+            throw new IllegalArgumentException("lastSnapshotVersion must be >= 0, got: " + lastSnapshotVersion);
+        }
+        this.lastSnapshotVersion = lastSnapshotVersion;
     }
 }

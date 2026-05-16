@@ -132,11 +132,19 @@ public class BankAccount extends Aggregate<BankAccountState> {
 
     /**
      * Transfers money from this account to another.
-     * // [SECURITY] Balance check BEFORE creating event — same reasoning as withdraw
+     *
+     * <p>// [SECURITY] Balance check BEFORE creating event — same reasoning as withdraw.
+     *
+     * <p><b>ARCHITECTURE WARNING — non-atomic cross-aggregate transfer:</b>
+     * The caller MUST also call {@link #receiveTransfer} on the destination aggregate and save it.
+     * If the JVM crashes after {@code engine.save(sourceRoot)} but before {@code engine.save(destRoot)},
+     * the debit is recorded but the credit is not — money is permanently destroyed.
+     * The service layer MUST implement a saga or outbox pattern to compensate for this failure window.
+     * Do NOT call this method without a corresponding {@code receiveTransfer} + save on the destination.
      *
      * @param root          the source account aggregate root
-     * @param toAccountId   destination account UUID
-     * @param amountCents   amount in cents, must be positive and <= 1,000,000.00
+     * @param toAccountId   destination account UUID (existence is NOT validated here — service layer responsibility)
+     * @param amountCents   amount in cents, must be positive and &lt;= 1,000,000.00
      * @param description   human-readable description
      */
     public void transfer(AggregateRoot<BankAccountState> root, UUID toAccountId, long amountCents, String description) {

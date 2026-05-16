@@ -47,6 +47,31 @@ public final class JdbcEventStore implements EventStore {
             "SELECT event_id, aggregate_id, aggregate_type, event_type, payload::text, version, created_at " +
             "FROM events WHERE aggregate_id = ? AND version > ? ORDER BY version ASC";
 
+    // [SECURITY] Parameterized query with LIMIT — prevents unbounded result sets from projection polling
+    // Cursor uses (created_at, event_id::text) composite key for stable global ordering across aggregates.
+    // UUID text representation is deterministic and avoids integer overflow vs BIGSERIAL.
+    private static final String LOAD_ALL_FIRST_SQL =
+            "SELECT event_id, aggregate_id, aggregate_type, event_type, payload::text, version, created_at " +
+            "FROM events " +
+            "ORDER BY created_at ASC, event_id::text ASC " +
+            "LIMIT ?";
+
+    // [SECURITY] Cursor existence check — prevents CROSS JOIN freeze attack.
+    // A tampered projection_positions row pointing to a non-existent event_id causes the CTE to return
+    // empty; CROSS JOIN then produces zero rows, silently halting all future projection processing forever.
+    // Fail-fast with IllegalStateException surfaces position corruption to operators immediately.
+    private static final String CURSOR_EXISTS_SQL =
+            "SELECT COUNT(*) FROM events WHERE event_id = ?::uuid";
+
+    // [SECURITY] CTE isolates last-event lookup — prevents repeated subquery expansion and keeps bindings clean
+    private static final String LOAD_ALL_AFTER_SQL =
+            "WITH last AS (SELECT created_at, event_id::text AS eid FROM events WHERE event_id = ?::uuid) " +
+            "SELECT e.event_id, e.aggregate_id, e.aggregate_type, e.event_type, e.payload::text, e.version, e.created_at " +
+            "FROM events e CROSS JOIN last " +
+            "WHERE (e.created_at, e.event_id::text) > (last.created_at, last.eid) " +
+            "ORDER BY e.created_at ASC, e.event_id::text ASC " +
+            "LIMIT ?";
+
     private final JdbcTemplate jdbcTemplate;
     private final TransactionTemplate transactionTemplate;
 
@@ -76,17 +101,22 @@ public final class JdbcEventStore implements EventStore {
                     throw new ConcurrentModificationException(aggregateId, expectedVersion, currentVersion);
                 }
 
+                // [SECURITY] Validate all payloads upfront before any INSERT — fail-fast on the first
+                // invalid event without starting partial writes. Byte count used (not char count) to
+                // match StoredEvent validation and the actual PostgreSQL JSONB storage limit for
+                // multi-byte UTF-8 characters.
+                List<PGobject> jsonbPayloads = new java.util.ArrayList<>(events.size());
                 for (StoredEvent event : events) {
-                    // [SECURITY] Payload size re-validated before DB insert — defense in depth
-                    if (event.payload().length() > 65536) {
+                    byte[] payloadBytes = event.payload().getBytes(java.nio.charset.StandardCharsets.UTF_8);
+                    if (payloadBytes.length > 65536) {
                         throw new IllegalArgumentException(
-                                "Event payload exceeds 64KB limit: " + event.payload().length() + " chars");
+                                "Event payload exceeds 64KB limit: " + payloadBytes.length + " bytes");
                     }
                     // [SECURITY] JSON structure validated before DB insert — prevents raw DB cast errors
                     // from propagating with internal PostgreSQL error details
                     validateJson(event.payload());
 
-                    // [SECURITY] Payload inserted as PGobject(type="jsonb") — not as interpolated string
+                    // [SECURITY] Payload wrapped as PGobject(type="jsonb") — not as interpolated string
                     // This prevents any possibility of SQL injection through event payload content
                     PGobject jsonbPayload = new PGobject();
                     try {
@@ -95,13 +125,17 @@ public final class JdbcEventStore implements EventStore {
                     } catch (SQLException e) {
                         throw new IllegalArgumentException("Failed to create JSONB payload for event", e);
                     }
+                    jsonbPayloads.add(jsonbPayload);
+                }
 
+                for (int i = 0; i < events.size(); i++) {
+                    StoredEvent event = events.get(i);
                     jdbcTemplate.update(INSERT_SQL,
                             event.eventId(),
                             event.aggregateId(),
                             event.aggregateType(),
                             event.eventType(),
-                            jsonbPayload,
+                            jsonbPayloads.get(i),
                             event.version(),
                             Timestamp.from(event.timestamp())
                     );
@@ -133,6 +167,39 @@ public final class JdbcEventStore implements EventStore {
         return jdbcTemplate.query(LOAD_AFTER_SQL, new StoredEventRowMapper(), aggregateId, afterVersion);
     }
 
+    @Override
+    public List<StoredEvent> loadAllAfter(UUID lastEventId, int limit) {
+        // [SECURITY] Positive limit enforced — a zero or negative value would either return nothing
+        // (silent failure) or be rejected by the DB with an opaque error; both hide projection bugs
+        if (limit <= 0) {
+            throw new IllegalArgumentException("limit must be positive, got: " + limit);
+        }
+        if (lastEventId == null) {
+            // [SECURITY] Parameterized LIMIT — no string interpolation
+            return jdbcTemplate.query(LOAD_ALL_FIRST_SQL, new StoredEventRowMapper(), limit);
+        }
+        // [SECURITY] CTE uses parameterized binding for lastEventId; LIMIT bound separately
+        List<StoredEvent> result = jdbcTemplate.query(LOAD_ALL_AFTER_SQL, new StoredEventRowMapper(),
+                lastEventId.toString(), limit);
+
+        // [SECURITY] Lazy cursor existence check — only fires when result is empty to avoid an extra
+        // SELECT on every poll cycle when new events are present. Empty result is ambiguous: it means
+        // either "no new events" (cursor valid) or "cursor not found" (position corrupted). The extra
+        // SELECT disambiguates. Falling back to full replay on a missing cursor would re-process money
+        // events and cause double credit/debit, so we fail-fast instead.
+        if (result.isEmpty()) {
+            Integer cursorCount = jdbcTemplate.queryForObject(
+                    CURSOR_EXISTS_SQL, Integer.class, lastEventId.toString());
+            if (cursorCount == null || cursorCount == 0) {
+                throw new IllegalStateException(
+                        "[SECURITY] Projection cursor event not found in event store: " + lastEventId +
+                        " — position may be corrupted or events were restored without resetting projection_positions." +
+                        " Truncate projection_positions for this projection to reset from beginning.");
+            }
+        }
+        return result;
+    }
+
     // [SECURITY] JSON validation before DB insert — fail-fast with a clean IllegalArgumentException
     // Prevents raw PostgreSQL cast errors (which may expose internal details) from reaching the caller
     private static void validateJson(String payload) {
@@ -149,6 +216,12 @@ public final class JdbcEventStore implements EventStore {
     private static final class StoredEventRowMapper implements RowMapper<StoredEvent> {
         @Override
         public StoredEvent mapRow(@NonNull ResultSet rs, int rowNum) throws SQLException {
+            Timestamp createdAt = rs.getTimestamp("created_at");
+            if (createdAt == null) {
+                throw new IllegalStateException(
+                        "created_at is NULL for event_id=" + rs.getString("event_id") +
+                        " — schema or data integrity violation");
+            }
             return new StoredEvent(
                     UUID.fromString(rs.getString("event_id")),
                     UUID.fromString(rs.getString("aggregate_id")),
@@ -156,7 +229,7 @@ public final class JdbcEventStore implements EventStore {
                     rs.getString("event_type"),
                     rs.getString("payload"),
                     rs.getInt("version"),
-                    rs.getTimestamp("created_at").toInstant()
+                    createdAt.toInstant()
             );
         }
     }

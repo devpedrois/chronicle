@@ -77,4 +77,15 @@ public class JacksonEventSerializer<S> implements EventSerializer<S> {
             throw new IllegalArgumentException("Failed to deserialize state", e);
         }
     }
+
+    /**
+     * Resolves event type name via the whitelist registry — guarantees the stored name
+     * round-trips correctly through {@link #deserialize(String, String)}.
+     */
+    @Override
+    public String typeNameFor(DomainEvent event) {
+        // [SECURITY] Registry lookup — fails fast if event class was not registered,
+        // preventing getSimpleName() drift when a class is renamed after the registry mapping.
+        return typeRegistry.typeNameFor(event.getClass());
+    }
 }

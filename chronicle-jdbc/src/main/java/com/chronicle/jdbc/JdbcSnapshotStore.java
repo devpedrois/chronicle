@@ -3,6 +3,7 @@ package com.chronicle.jdbc;
 
 import com.chronicle.core.snapshot.Snapshot;
 import com.chronicle.core.store.SnapshotStore;
+import com.chronicle.core.util.ChecksumUtil;
 import org.postgresql.util.PGobject;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -10,10 +11,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
-import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
 import java.sql.Timestamp;
-import java.util.HexFormat;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
@@ -115,7 +113,7 @@ public final class JdbcSnapshotStore implements SnapshotStore {
         // Binding version detects version-rollback attacks.
         // Binding normalizedState detects state tampering.
         String checksumInput = loaded.aggregateId() + "|" + loaded.version() + "|" + loaded.state();
-        String recomputed = sha256(checksumInput);
+        String recomputed = ChecksumUtil.sha256(checksumInput);
         if (!recomputed.equals(loaded.checksum())) {
             log.warn("[SECURITY] Snapshot checksum mismatch for aggregate {} at version {} — discarding corrupted snapshot",
                     aggregateId, loaded.version());
@@ -125,13 +123,4 @@ public final class JdbcSnapshotStore implements SnapshotStore {
         return Optional.of(loaded);
     }
 
-    private String sha256(String input) {
-        try {
-            MessageDigest digest = MessageDigest.getInstance("SHA-256");
-            byte[] hash = digest.digest(input.getBytes(java.nio.charset.StandardCharsets.UTF_8));
-            return HexFormat.of().formatHex(hash);
-        } catch (NoSuchAlgorithmException e) {
-            throw new IllegalStateException("SHA-256 not available", e);
-        }
-    }
 }

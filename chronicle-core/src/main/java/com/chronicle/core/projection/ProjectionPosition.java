@@ -18,5 +18,8 @@ public record ProjectionPosition(
         Objects.requireNonNull(projectionName, "projectionName must not be null");
         Objects.requireNonNull(lastEventId, "lastEventId must not be null");
         Objects.requireNonNull(updatedAt, "updatedAt must not be null");
+        if (lastVersion < 0) {
+            throw new IllegalArgumentException("lastVersion must be >= 0, got: " + lastVersion);
+        }
     }
 }

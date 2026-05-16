@@ -29,6 +29,9 @@ public final class JdbcProjectionPositionStore implements ProjectionPositionStor
             "SELECT projection_name, last_event_id, last_version, updated_at " +
             "FROM projection_positions WHERE projection_name = ?";
 
+    private static final String DELETE_SQL =
+            "DELETE FROM projection_positions WHERE projection_name = ?";
+
     private final JdbcTemplate jdbcTemplate;
 
     public JdbcProjectionPositionStore(JdbcTemplate jdbcTemplate) {
@@ -38,13 +41,26 @@ public final class JdbcProjectionPositionStore implements ProjectionPositionStor
     @Override
     public Optional<ProjectionPosition> getPosition(String projectionName) {
         Objects.requireNonNull(projectionName, "projectionName must not be null");
-        List<ProjectionPosition> results = jdbcTemplate.query(SELECT_SQL, (rs, rowNum) ->
-                new ProjectionPosition(
-                        rs.getString("projection_name"),
-                        UUID.fromString(rs.getString("last_event_id")),
-                        rs.getLong("last_version"),
-                        rs.getTimestamp("updated_at").toInstant()
-                ), projectionName);
+        List<ProjectionPosition> results = jdbcTemplate.query(SELECT_SQL, (rs, rowNum) -> {
+            String lastEventIdStr = rs.getString("last_event_id");
+            if (lastEventIdStr == null) {
+                throw new IllegalStateException(
+                        "last_event_id is NULL for projection '" + rs.getString("projection_name") +
+                        "' — position row is corrupted");
+            }
+            java.sql.Timestamp updatedAt = rs.getTimestamp("updated_at");
+            if (updatedAt == null) {
+                throw new IllegalStateException(
+                        "updated_at is NULL for projection '" + rs.getString("projection_name") +
+                        "' — position row is corrupted");
+            }
+            return new ProjectionPosition(
+                    rs.getString("projection_name"),
+                    UUID.fromString(lastEventIdStr),
+                    rs.getLong("last_version"),
+                    updatedAt.toInstant()
+            );
+        }, projectionName);
         return results.isEmpty() ? Optional.empty() : Optional.of(results.get(0));
     }
 
@@ -57,5 +73,11 @@ public final class JdbcProjectionPositionStore implements ProjectionPositionStor
                 position.lastVersion(),
                 Timestamp.from(position.updatedAt())
         );
+    }
+
+    @Override
+    public void deletePosition(String projectionName) {
+        Objects.requireNonNull(projectionName, "projectionName must not be null");
+        jdbcTemplate.update(DELETE_SQL, projectionName);
     }
 }

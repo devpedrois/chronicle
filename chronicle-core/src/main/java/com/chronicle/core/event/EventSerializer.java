@@ -40,4 +40,16 @@ public interface EventSerializer<S> {
      * @return deserialized aggregate state
      */
     S deserializeState(String json, Class<S> stateType);
+
+    /**
+     * Returns the registered type name for a domain event class.
+     * Implementations backed by a type registry should resolve via the registry
+     * to guarantee the stored name matches the deserialization whitelist.
+     *
+     * @param event the domain event
+     * @return the type name to store alongside the serialized payload
+     */
+    default String typeNameFor(DomainEvent event) {
+        return event.getClass().getSimpleName();
+    }
 }
