@@ -51,10 +51,14 @@ public class GlobalExceptionHandler {
         return Map.of("error", "Validation failed", "fields", fields);
     }
 
+    // [SECURITY] IllegalArgumentException message NEVER forwarded to client — internal validation
+    // messages (e.g. "payload exceeds 64KB: N bytes", "Unknown event type: X") would disclose
+    // internal limits, field names, and filtering logic to attackers.
     @ExceptionHandler(IllegalArgumentException.class)
     @ResponseStatus(HttpStatus.BAD_REQUEST)
     public Map<String, String> handleIllegalArgument(IllegalArgumentException e) {
-        return Map.of("error", e.getMessage());
+        log.warn("IllegalArgumentException suppressed from response: {}", e.getMessage());
+        return Map.of("error", "Invalid request");
     }
 
     // [SECURITY] Catches invalid UUID format in path params — returns 400 not 500

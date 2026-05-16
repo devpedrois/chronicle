@@ -1,4 +1,8 @@
 spring:
+  jackson:
+    deserialization:
+      # [SECURITY] Global backup — FAIL_ON_UNKNOWN_PROPERTIES rejects extra fields in request bodies
+      fail-on-unknown-properties: true
   datasource:
     url: ${DB_URL:jdbc:postgresql://localhost:5432/chronicle}
     username: ${DB_USER:chronicle}
@@ -13,6 +17,11 @@ server:
     # [SECURITY] Never expose stack traces or internal messages to clients
     include-stacktrace: never
     include-message: never
+    include-binding-errors: never
+    include-exception: false
+  tomcat:
+    # [SECURITY] Limit form POST body size — prevents large payload DoS
+    max-http-form-post-size: 65536
 
 chronicle:
   projection:

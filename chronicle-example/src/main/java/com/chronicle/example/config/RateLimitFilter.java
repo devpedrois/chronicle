@@ -6,6 +6,7 @@ import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
+import org.springframework.lang.NonNull;
 import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
 
@@ -40,22 +41,21 @@ public class RateLimitFilter extends OncePerRequestFilter {
     }
 
     @Override
-    protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain chain)
+    protected void doFilterInternal(@NonNull HttpServletRequest request, @NonNull HttpServletResponse response, @NonNull FilterChain chain)
             throws ServletException, IOException {
         // [SECURITY] Use getRemoteAddr() NOT X-Forwarded-For — X-Forwarded-For is spoofable
         String ip = request.getRemoteAddr();
         Bucket bucket = getBucket(ip);
         if (bucket != null && bucket.tryConsume(1)) {
             chain.doFilter(request, response);
-        } else if (bucket == null) {
-            // [SECURITY] Bucket map full — reject new IPs rather than allow unlimited or OOM
-            response.setStatus(429);
-            response.setContentType("application/json");
-            response.getWriter().write("{\"error\":\"Too many requests\"}");
         } else {
+            // [SECURITY] Rate limit exceeded or bucket map full — 429 with retry guidance
+            // Retry-After header required by RFC 6585 §4 — HTTP middleware and API gateways
+            // use the header for automatic backoff; body alone is insufficient for machine clients
             response.setStatus(429);
+            response.setHeader("Retry-After", "60");
             response.setContentType("application/json");
-            response.getWriter().write("{\"error\":\"Too many requests\"}");
+            response.getWriter().write("{\"error\":\"Rate limit exceeded\",\"retry_after_seconds\":60}");
         }
     }
 }
