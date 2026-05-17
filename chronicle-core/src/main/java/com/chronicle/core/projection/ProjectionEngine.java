@@ -6,8 +6,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.time.Instant;
-import java.util.HashMap;
 import java.util.List;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
@@ -38,9 +38,9 @@ public class ProjectionEngine {
     private final long pollIntervalMs;
     private final ScheduledExecutorService scheduler;
     private final AtomicBoolean running = new AtomicBoolean(false);
-    // Accessed only from the single-threaded scheduler — HashMap is safe (no concurrent access)
-    private final Map<String, Integer> consecutiveFailures = new HashMap<>();
-    private final Map<String, Long> backedOffUntilMs = new HashMap<>();
+    // ConcurrentHashMap allows clearBackoffState() to be called from test threads safely
+    private final Map<String, Integer> consecutiveFailures = new ConcurrentHashMap<>();
+    private final Map<String, Long> backedOffUntilMs = new ConcurrentHashMap<>();
 
     public ProjectionEngine(
             EventStore eventStore,
@@ -91,6 +91,16 @@ public class ProjectionEngine {
 
     public boolean isRunning() {
         return running.get() && !scheduler.isShutdown();
+    }
+
+    /**
+     * Clears all backoff state so the next poll cycle runs immediately for all projections.
+     * Safe to call from any thread. Intended for test isolation — call in {@code @BeforeEach}
+     * to prevent accumulated backoff from one test affecting the next.
+     */
+    public void clearBackoffState() {
+        consecutiveFailures.clear();
+        backedOffUntilMs.clear();
     }
 
     /**

@@ -7,21 +7,29 @@ import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.testcontainers.containers.PostgreSQLContainer;
-import org.testcontainers.junit.jupiter.Container;
-import org.testcontainers.junit.jupiter.Testcontainers;
 
+// Singleton pattern: container started once and shared across all subclasses (SecurityRegressionTest,
+// AccountApiTest). Without this, Testcontainers stops the container after each class, but the
+// cached Spring context still points to the old port → connection refused for the next class.
 @SpringBootTest(classes = ChronicleExampleApplication.class)
 @AutoConfigureMockMvc
-@Testcontainers
 @ActiveProfiles("test")
 public abstract class AbstractApiTest {
 
-    @Container
+    static final PostgreSQLContainer<?> POSTGRES;
+
+    static {
+        POSTGRES = createContainer();
+        POSTGRES.start();
+    }
+
     @SuppressWarnings("resource")
-    static final PostgreSQLContainer<?> POSTGRES = new PostgreSQLContainer<>("postgres:16-alpine")
-            .withDatabaseName("chronicle_api_test")
-            .withUsername("test")
-            .withPassword("test");
+    private static PostgreSQLContainer<?> createContainer() {
+        return new PostgreSQLContainer<>("postgres:16-alpine")
+                .withDatabaseName("chronicle_api_test")
+                .withUsername("test")
+                .withPassword("test");
+    }
 
     @DynamicPropertySource
     static void configureDataSource(DynamicPropertyRegistry registry) {

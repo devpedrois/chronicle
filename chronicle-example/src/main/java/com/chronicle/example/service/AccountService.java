@@ -16,6 +16,7 @@ import com.chronicle.example.dto.WithdrawRequest;
 import com.chronicle.example.exception.NotFoundException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 
@@ -35,16 +36,22 @@ public class AccountService {
     private final EventStore eventStore;
     private final JdbcTemplate jdbcTemplate;
     private final ObjectMapper objectMapper;
+    // [SECURITY] Configurable bound — prevents heap exhaustion via GET /events on accounts with
+    // thousands of events. Clients must paginate using the `after` query parameter.
+    // Default: 1000. Overridable via chronicle.api.max-events-per-response (e.g. in tests).
+    private final int maxEventsPerResponse;
 
     public AccountService(
             ChronicleEngine<BankAccountState> engine,
             EventStore eventStore,
             JdbcTemplate jdbcTemplate,
-            ObjectMapper objectMapper) {
+            ObjectMapper objectMapper,
+            @Value("${chronicle.api.max-events-per-response:1000}") int maxEventsPerResponse) {
         this.engine = engine;
         this.eventStore = eventStore;
         this.jdbcTemplate = jdbcTemplate;
         this.objectMapper = objectMapper;
+        this.maxEventsPerResponse = maxEventsPerResponse;
     }
 
     public AccountResponse createAccount(CreateAccountRequest req) {
@@ -120,6 +127,14 @@ public class AccountService {
             // Distinguish "account exists with no events after version" from "account not found"
             engine.load(accountId).orElseThrow(() -> new NotFoundException(accountId));
             return List.of();
+        }
+        // [SECURITY] Heap exhaustion guard — unbounded event lists enable DoS via large memory allocation.
+        // An attacker with multiple IPs can accumulate thousands of events then trigger OOM with concurrent GET /events.
+        // Clients must paginate using the `after` query parameter.
+        if (events.size() > maxEventsPerResponse) {
+            throw new IllegalArgumentException(
+                    "Event list exceeds max-events-per-response limit of " + maxEventsPerResponse +
+                    ". Use the 'after' query parameter to paginate.");
         }
         return events.stream().map(this::toEventResponse).toList();
     }

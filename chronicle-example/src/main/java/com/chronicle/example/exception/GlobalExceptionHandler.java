@@ -7,6 +7,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.validation.FieldError;
+import org.springframework.web.HttpMediaTypeNotSupportedException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.ResponseStatus;
@@ -73,6 +74,15 @@ public class GlobalExceptionHandler {
     @ResponseStatus(HttpStatus.BAD_REQUEST)
     public Map<String, String> handleMessageNotReadable(HttpMessageNotReadableException e) {
         return Map.of("error", "Invalid request body");
+    }
+
+    // [SECURITY] Missing or wrong Content-Type → 415, not 500.
+    // Without this explicit handler, @ExceptionHandler(Exception.class) catches HttpMediaTypeNotSupportedException
+    // before DefaultHandlerExceptionResolver, producing a misleading 500 response.
+    @ExceptionHandler(HttpMediaTypeNotSupportedException.class)
+    @ResponseStatus(HttpStatus.UNSUPPORTED_MEDIA_TYPE)
+    public Map<String, String> handleUnsupportedMediaType(HttpMediaTypeNotSupportedException e) {
+        return Map.of("error", "Unsupported media type. Use Content-Type: application/json");
     }
 
     @ExceptionHandler(Exception.class)

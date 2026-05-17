@@ -2,3 +2,6 @@
 chronicle:
   projection:
     poll-interval-ms: 100
+  api:
+    # [SECURITY] Low limit in tests makes heap-exhaustion guard testable without creating 1000+ events
+    max-events-per-response: 5

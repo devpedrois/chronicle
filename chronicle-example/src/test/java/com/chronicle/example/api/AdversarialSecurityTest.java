@@ -81,7 +81,7 @@ class AdversarialSecurityTest {
         String id = createAccount("Alice");
 
         mockMvc.perform(post("/api/accounts/" + id + "/deposit")
-                        .contentType(MediaType.APPLICATION_JSON)
+                        .contentType(MediaType.APPLICATION_JSON_VALUE)
                         .content("{\"amountCents\":100,\"description\":\"test\",\"@class\":\"java.lang.Runtime\"}"))
                 .andExpect(status().isBadRequest());
     }
@@ -96,7 +96,7 @@ class AdversarialSecurityTest {
 
         String injection = "'; DROP TABLE events; --";
         mockMvc.perform(post("/api/accounts/" + id + "/deposit")
-                        .contentType(MediaType.APPLICATION_JSON)
+                        .contentType(MediaType.APPLICATION_JSON_VALUE)
                         .content("{\"amountCents\":100,\"description\":\"" + injection + "\"}"))
                 .andExpect(status().isOk());
 
@@ -115,7 +115,7 @@ class AdversarialSecurityTest {
         String id = createAccount("Carol");
 
         mockMvc.perform(post("/api/accounts/" + id + "/deposit")
-                        .contentType(MediaType.APPLICATION_JSON)
+                        .contentType(MediaType.APPLICATION_JSON_VALUE)
                         .content("{\"amountCents\":100,\"description\":\"test\",\"version\":999}"))
                 .andExpect(status().isBadRequest());
 
@@ -133,7 +133,7 @@ class AdversarialSecurityTest {
     // reject unknown fields; account CANNOT be created with an arbitrary starting balance
     void massAssignment_balanceInjection_returns400() throws Exception {
         mockMvc.perform(post("/api/accounts")
-                        .contentType(MediaType.APPLICATION_JSON)
+                        .contentType(MediaType.APPLICATION_JSON_VALUE)
                         .content("{\"ownerName\":\"Eve\",\"balance\":999999,\"balanceCents\":999999}"))
                 .andExpect(status().isBadRequest());
     }
@@ -204,14 +204,14 @@ class AdversarialSecurityTest {
 
         // 400 from malformed JSON
         String malformedBody = mockMvc.perform(post("/api/accounts")
-                        .contentType(MediaType.APPLICATION_JSON)
+                        .contentType(MediaType.APPLICATION_JSON_VALUE)
                         .content("{bad-json"))
                 .andExpect(status().isBadRequest())
                 .andReturn().getResponse().getContentAsString();
 
         // 400 from Bean Validation
         String validationBody = mockMvc.perform(post("/api/accounts")
-                        .contentType(MediaType.APPLICATION_JSON)
+                        .contentType(MediaType.APPLICATION_JSON_VALUE)
                         .content("{\"ownerName\":\"\"}"))
                 .andExpect(status().isBadRequest())
                 .andReturn().getResponse().getContentAsString();
@@ -235,7 +235,7 @@ class AdversarialSecurityTest {
         String largeDescription = "X".repeat(65537);
 
         mockMvc.perform(post("/api/accounts/" + id + "/deposit")
-                        .contentType(MediaType.APPLICATION_JSON)
+                        .contentType(MediaType.APPLICATION_JSON_VALUE)
                         .content("{\"amountCents\":100,\"description\":\"" + largeDescription + "\"}"))
                 .andExpect(status().isBadRequest());
     }
@@ -321,7 +321,7 @@ class AdversarialSecurityTest {
         // Path 2: self-transfer triggers IAE("Cannot transfer to the same account")
         deposit(id, 1000);
         String selfTransferBody = mockMvc.perform(post("/api/accounts/" + id + "/transfer")
-                        .contentType(MediaType.APPLICATION_JSON)
+                        .contentType(MediaType.APPLICATION_JSON_VALUE)
                         .content("{\"toAccountId\":\"" + id + "\",\"amountCents\":100,\"description\":\"self\"}"))
                 .andExpect(status().isBadRequest())
                 .andReturn().getResponse().getContentAsString();
@@ -370,7 +370,7 @@ class AdversarialSecurityTest {
         deposit(id, 500);
 
         mockMvc.perform(post("/api/accounts/" + id + "/withdraw")
-                        .contentType(MediaType.APPLICATION_JSON)
+                        .contentType(MediaType.APPLICATION_JSON_VALUE)
                         .content("{\"amountCents\":500,\"description\":\"All out\"}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.balanceCents").value(0));
@@ -386,7 +386,7 @@ class AdversarialSecurityTest {
 
     private String createAccount(String ownerName) throws Exception {
         MvcResult result = mockMvc.perform(post("/api/accounts")
-                        .contentType(MediaType.APPLICATION_JSON)
+                        .contentType(MediaType.APPLICATION_JSON_VALUE)
                         .content("{\"ownerName\":\"" + ownerName + "\"}"))
                 .andExpect(status().isCreated())
                 .andReturn();
@@ -398,14 +398,13 @@ class AdversarialSecurityTest {
 
     private void deposit(String id, long amountCents) throws Exception {
         mockMvc.perform(post("/api/accounts/" + id + "/deposit")
-                        .contentType(MediaType.APPLICATION_JSON)
+                        .contentType(MediaType.APPLICATION_JSON_VALUE)
                         .content("{\"amountCents\":" + amountCents + ",\"description\":\"Deposit\"}"))
                 .andExpect(status().isOk());
     }
 
     // [SECURITY] Reflection-based bucket reset — ensures rate limit test starts from a known state
     // without needing to expose the bucket map via a test-only API
-    @SuppressWarnings("unchecked")
     private void clearRateLimitBuckets() throws Exception {
         Field bucketsField = RateLimitFilter.class.getDeclaredField("buckets");
         bucketsField.setAccessible(true);

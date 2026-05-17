@@ -1,5 +1,7 @@
 package com.chronicle.example.api;
 
+import com.chronicle.core.projection.ProjectionEngine;
+import com.chronicle.example.config.RateLimitFilter;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -8,6 +10,9 @@ import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
+
+import java.lang.reflect.Field;
+import java.util.concurrent.ConcurrentMap;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
@@ -22,8 +27,18 @@ class AccountApiTest extends AbstractApiTest {
     @Autowired
     private JdbcTemplate jdbcTemplate;
 
+    @Autowired
+    private RateLimitFilter rateLimitFilter;
+
+    @Autowired
+    private ProjectionEngine projectionEngine;
+
     @BeforeEach
-    void cleanDatabase() {
+    void cleanDatabase() throws Exception {
+        Field bucketsField = RateLimitFilter.class.getDeclaredField("buckets");
+        bucketsField.setAccessible(true);
+        ((ConcurrentMap<?, ?>) bucketsField.get(rateLimitFilter)).clear();
+        projectionEngine.clearBackoffState();
         jdbcTemplate.execute("TRUNCATE TABLE processed_projection_events");
         jdbcTemplate.execute("TRUNCATE TABLE projection_positions");
         jdbcTemplate.execute("ALTER TABLE balances DISABLE TRIGGER ALL");
@@ -38,7 +53,7 @@ class AccountApiTest extends AbstractApiTest {
     @DisplayName("Test 1: POST /api/accounts with valid ownerName → 201 with id and ownerName")
     void createAccount_validRequest_returns201() throws Exception {
         MvcResult result = mockMvc.perform(post("/api/accounts")
-                        .contentType(MediaType.APPLICATION_JSON)
+                        .contentType(MediaType.APPLICATION_JSON_VALUE)
                         .content("{\"ownerName\":\"Alice Smith\"}"))
                 .andExpect(status().isCreated())
                 .andExpect(jsonPath("$.id").isNotEmpty())
@@ -55,7 +70,7 @@ class AccountApiTest extends AbstractApiTest {
         String id = createAccount("Bob");
 
         mockMvc.perform(post("/api/accounts/" + id + "/deposit")
-                        .contentType(MediaType.APPLICATION_JSON)
+                        .contentType(MediaType.APPLICATION_JSON_VALUE)
                         .content("{\"amountCents\":5000,\"description\":\"Salary\"}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.balanceCents").value(5000));
@@ -68,7 +83,7 @@ class AccountApiTest extends AbstractApiTest {
         deposit(id, 10000);
 
         mockMvc.perform(post("/api/accounts/" + id + "/withdraw")
-                        .contentType(MediaType.APPLICATION_JSON)
+                        .contentType(MediaType.APPLICATION_JSON_VALUE)
                         .content("{\"amountCents\":3000,\"description\":\"Rent\"}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.balanceCents").value(7000));
@@ -80,7 +95,7 @@ class AccountApiTest extends AbstractApiTest {
         String id = createAccount("Dave");
 
         mockMvc.perform(post("/api/accounts/" + id + "/withdraw")
-                        .contentType(MediaType.APPLICATION_JSON)
+                        .contentType(MediaType.APPLICATION_JSON_VALUE)
                         .content("{\"amountCents\":1000,\"description\":\"ATM\"}"))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.error").value("Insufficient funds"));
@@ -116,7 +131,7 @@ class AccountApiTest extends AbstractApiTest {
         String id = createAccount("Frank");
 
         mockMvc.perform(post("/api/accounts/" + id + "/deposit")
-                        .contentType(MediaType.APPLICATION_JSON)
+                        .contentType(MediaType.APPLICATION_JSON_VALUE)
                         .content("{\"amountCents\":0,\"description\":\"Zero\"}"))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.error").value("Validation failed"));
@@ -128,7 +143,7 @@ class AccountApiTest extends AbstractApiTest {
         String id = createAccount("Grace");
 
         mockMvc.perform(post("/api/accounts/" + id + "/deposit")
-                        .contentType(MediaType.APPLICATION_JSON)
+                        .contentType(MediaType.APPLICATION_JSON_VALUE)
                         .content("{\"amountCents\":-100,\"description\":\"Neg\"}"))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.error").value("Validation failed"));
@@ -138,7 +153,7 @@ class AccountApiTest extends AbstractApiTest {
     @DisplayName("Test 9: POST /api/accounts with blank ownerName → 400 (Bean Validation)")
     void createAccount_blankOwnerName_returns400() throws Exception {
         mockMvc.perform(post("/api/accounts")
-                        .contentType(MediaType.APPLICATION_JSON)
+                        .contentType(MediaType.APPLICATION_JSON_VALUE)
                         .content("{\"ownerName\":\"\"}"))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.error").value("Validation failed"));
@@ -162,7 +177,7 @@ class AccountApiTest extends AbstractApiTest {
         Thread.sleep(600);
 
         mockMvc.perform(post("/api/accounts/" + id + "/transfer")
-                        .contentType(MediaType.APPLICATION_JSON)
+                        .contentType(MediaType.APPLICATION_JSON_VALUE)
                         .content("{\"toAccountId\":\"00000000-0000-0000-0000-000000000099\",\"amountCents\":1000,\"description\":\"Test\"}"))
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.error").value("Account not found"));
@@ -181,7 +196,7 @@ class AccountApiTest extends AbstractApiTest {
         deposit(id, 3000);
 
         mockMvc.perform(post("/api/accounts/" + id + "/transfer")
-                        .contentType(MediaType.APPLICATION_JSON)
+                        .contentType(MediaType.APPLICATION_JSON_VALUE)
                         .content("{\"toAccountId\":\"" + id + "\",\"amountCents\":1000,\"description\":\"Self\"}"))
                 .andExpect(status().isBadRequest());
     }
@@ -192,7 +207,7 @@ class AccountApiTest extends AbstractApiTest {
         String id = createAccount("Jack");
 
         mockMvc.perform(post("/api/accounts/" + id + "/deposit")
-                        .contentType(MediaType.APPLICATION_JSON)
+                        .contentType(MediaType.APPLICATION_JSON_VALUE)
                         .content("{\"amountCents\":100000001,\"description\":\"OverMax\"}"))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.error").value("Validation failed"));
@@ -203,7 +218,7 @@ class AccountApiTest extends AbstractApiTest {
     void createAccount_extraFieldsInBody_ignoredNoError() throws Exception {
         // [SECURITY] FAIL_ON_UNKNOWN_PROPERTIES=true should reject this — verify 400
         mockMvc.perform(post("/api/accounts")
-                        .contentType(MediaType.APPLICATION_JSON)
+                        .contentType(MediaType.APPLICATION_JSON_VALUE)
                         .content("{\"ownerName\":\"Kate\",\"version\":999,\"aggregateType\":\"hacked\"}"))
                 .andExpect(status().isBadRequest());
     }
@@ -226,7 +241,7 @@ class AccountApiTest extends AbstractApiTest {
     @DisplayName("Security 6: POST /api/accounts with malformed JSON body → 400, no stack trace")
     void createAccount_malformedJson_returns400NoStackTrace() throws Exception {
         String response = mockMvc.perform(post("/api/accounts")
-                        .contentType(MediaType.APPLICATION_JSON)
+                        .contentType(MediaType.APPLICATION_JSON_VALUE)
                         .content("{not-valid-json"))
                 .andExpect(status().isBadRequest())
                 .andReturn().getResponse().getContentAsString();
@@ -253,7 +268,7 @@ class AccountApiTest extends AbstractApiTest {
         String id = createAccount("Mia");
 
         mockMvc.perform(post("/api/accounts/" + id + "/transfer")
-                        .contentType(MediaType.APPLICATION_JSON)
+                        .contentType(MediaType.APPLICATION_JSON_VALUE)
                         .content("{\"toAccountId\":\"not-a-uuid\",\"amountCents\":1000,\"description\":\"Test\"}"))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.error").exists());
@@ -263,7 +278,7 @@ class AccountApiTest extends AbstractApiTest {
 
     private String createAccount(String ownerName) throws Exception {
         MvcResult result = mockMvc.perform(post("/api/accounts")
-                        .contentType(MediaType.APPLICATION_JSON)
+                        .contentType(MediaType.APPLICATION_JSON_VALUE)
                         .content("{\"ownerName\":\"" + ownerName + "\"}"))
                 .andExpect(status().isCreated())
                 .andReturn();
@@ -276,7 +291,7 @@ class AccountApiTest extends AbstractApiTest {
 
     private void deposit(String id, long amountCents) throws Exception {
         mockMvc.perform(post("/api/accounts/" + id + "/deposit")
-                        .contentType(MediaType.APPLICATION_JSON)
+                        .contentType(MediaType.APPLICATION_JSON_VALUE)
                         .content("{\"amountCents\":" + amountCents + ",\"description\":\"Deposit\"}"))
                 .andExpect(status().isOk());
     }
